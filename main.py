@@ -23,11 +23,22 @@ from loading_components import (
     loading_context
 )
 
+def _limpiar_session_state_correcciones():
+    """
+    Limpia las variables de session_state relacionadas con correcciones de horarios
+    """
+    keys_to_remove = ['correcciones_horarios', 'decisiones_admin', 'correcciones_ambiguos']
+    for key in keys_to_remove:
+        if key in st.session_state:
+            del st.session_state[key]
+
 # Función para cargar CSS
 def load_css():
     """Carga los estilos CSS personalizados"""
+    import os
     try:
-        with open("styles.css", encoding='utf-8') as f:
+        css_path = os.path.join(os.path.dirname(__file__), "styles.css")
+        with open(css_path, encoding='utf-8') as f:
             st.markdown(f"<style>{f.read()}</style>", unsafe_allow_html=True)
     except FileNotFoundError:
         st.warning(" Archivo de estilos no encontrado. Usando estilos por defecto.")
@@ -80,37 +91,40 @@ if st.session_state.exit_app:
 # Mostrar header personalizado
 show_custom_header()
 
-# Sección de descarga de plantilla
+# Sección compacta: Configuración y archivo
 st.markdown('<div class="section-card fade-in-up">', unsafe_allow_html=True)
-st.markdown('<div class="section-header"> Plantilla de Excel</div>', unsafe_allow_html=True)
-mostrar_descarga_plantilla()
-st.markdown('</div>', unsafe_allow_html=True)
 
-# Sección de configuración
-st.markdown('<div class="section-card fade-in-up">', unsafe_allow_html=True)
-st.markdown('<div class="section-header"> Configuración</div>', unsafe_allow_html=True)
-
-# Input para valor por hora
+# Plantilla y configuración en una sola sección
 col1, col2 = st.columns([1, 1])
 with col1:
+    st.markdown('<div class="section-header">📋 Configuración</div>', unsafe_allow_html=True)
     valor_por_hora = mostrar_input_valor_hora()
+    
 with col2:
-    st.markdown('<div class="metric-card">', unsafe_allow_html=True)
-    st.markdown(f'<div class="metric-label">Valor por Hora</div>', unsafe_allow_html=True)
-    st.markdown(f'<div class="metric-value">${valor_por_hora:,.0f}</div>', unsafe_allow_html=True)
-    st.markdown('</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-header">📊 Valor Actual</div>', unsafe_allow_html=True)
+    st.markdown(f"""
+    <div class="metric-card" style="margin-top: 1rem;">
+        <div class="metric-label">Valor por Hora</div>
+        <div class="metric-value">${valor_por_hora:,.0f}</div>
+    </div>
+    """, unsafe_allow_html=True)
+
+# Plantilla y feriados en la misma sección
+st.markdown("---")
+col3, col4 = st.columns([1, 1])
+with col3:
+    st.markdown('<div class="section-header">📄 Plantilla</div>', unsafe_allow_html=True)
+    mostrar_descarga_plantilla()
+    
+with col4:
+    st.markdown('<div class="section-header">📅 Feriados</div>', unsafe_allow_html=True)
+    opcion_feriados, dias_feriados, cantidad_feriados = configurar_feriados()
 
 st.markdown('</div>', unsafe_allow_html=True)
 
-# Sección de feriados
+# Sección de subida de archivo más compacta
 st.markdown('<div class="section-card fade-in-up">', unsafe_allow_html=True)
-st.markdown('<div class="section-header"> Configuración de Feriados</div>', unsafe_allow_html=True)
-opcion_feriados, dias_feriados, cantidad_feriados = configurar_feriados()
-st.markdown('</div>', unsafe_allow_html=True)
-
-# Sección de subida de archivo
-st.markdown('<div class="section-card fade-in-up">', unsafe_allow_html=True)
-st.markdown('<div class="section-header"> Subir Archivo</div>', unsafe_allow_html=True)
+st.markdown('<div class="section-header">📁 Subir Archivo</div>', unsafe_allow_html=True)
 uploaded_file, tipo_archivo = mostrar_subida_archivo()
 st.markdown('</div>', unsafe_allow_html=True)
 
@@ -142,8 +156,13 @@ if uploaded_file:
                 st.markdown(f'<div class="custom-alert alert-error">El archivo Excel no contiene las siguientes columnas necesarias: {", ".join(columnas_faltantes)}</div>', unsafe_allow_html=True)
             else:
                 # NUEVA FUNCIONALIDAD: Detectar y corregir registros incompletos en Excel
-                from pdf_processor import detectar_registros_incompletos, filtrar_registros_sin_asistencia
-                from ui_components import mostrar_editor_registros_incompletos, aplicar_correcciones_a_dataframe
+                from pdf_processor import detectar_registros_incompletos, filtrar_registros_sin_asistencia, detectar_horarios_ambiguos
+                from ui_components import (
+                    mostrar_editor_registros_incompletos, 
+                    aplicar_correcciones_a_dataframe,
+                    mostrar_editor_horarios_ambiguos,
+                    aplicar_correcciones_ambiguos_a_dataframe
+                )
                 
                 # Primero, filtrar registros sin asistencia (sin entrada ni salida = no trabajó)
                 df_con_asistencia, df_sin_asistencia = filtrar_registros_sin_asistencia(df)
@@ -174,8 +193,7 @@ if uploaded_file:
                         st.success(f"✅ {len(df_incompletos_excel)} registro(s) corregido(s) exitosamente")
                         
                         # Limpiar session state de correcciones
-                        if 'correcciones_horarios' in st.session_state:
-                            del st.session_state.correcciones_horarios
+                        _limpiar_session_state_correcciones()
                     else:
                         # Detener ejecución hasta que se apliquen las correcciones
                         st.warning(" Completa los datos faltantes y presiona 'Aplicar Correcciones' para continuar")
@@ -184,17 +202,34 @@ if uploaded_file:
                 # Usar el DataFrame con asistencia para los cálculos
                 df = df_con_asistencia
                 
+                # NUEVA FUNCIONALIDAD: Detectar horarios ambiguos (entrada/salida posiblemente intercambiadas)
+                df_ambiguos_excel = detectar_horarios_ambiguos(df)
+                
+                if not df_ambiguos_excel.empty:
+                    st.markdown(f"""
+                    <div class="custom-alert alert-info">
+                        🤔 <strong>{len(df_ambiguos_excel)} registro(s) con horarios sospechosos</strong><br>
+                        Se detectaron horarios que podrían estar mal asignados (ej: entrada muy tarde, salida muy temprano).
+                    </div>
+                    """, unsafe_allow_html=True)
+                    
+                    correcciones_ambiguos_aplicadas, _ = mostrar_editor_horarios_ambiguos(df_ambiguos_excel)
+                    
+                    if correcciones_ambiguos_aplicadas:
+                        df = aplicar_correcciones_ambiguos_a_dataframe(df, df_ambiguos_excel)
+                        st.success(f"✅ Se corrigieron {len(df_ambiguos_excel)} registro(s) con horarios ambiguos")
+                
                 # Mostrar loading de cálculos
                 calc_placeholder = st.empty()
                 with calc_placeholder:
                     mostrar_loading_calculos()
-                
-                resultados, total_horas, total_sueldos = procesar_datos_excel(
+
+                resultados, total_horas, total_sueldos, total_horas_normales, total_horas_especiales = procesar_datos_excel(
                     df, valor_por_hora, opcion_feriados, dias_feriados, cantidad_feriados
                 )
                 calc_placeholder.empty()  # Limpiar loading de cálculos
                 
-                mostrar_resultados(resultados, total_horas, total_sueldos, valor_por_hora, dias_feriados)
+                mostrar_resultados(resultados, total_horas, total_sueldos, total_horas_normales, total_horas_especiales, valor_por_hora, dias_feriados)
         except Exception as e:
             loading_placeholder.empty()
             st.error(f" Error al procesar el archivo: {str(e)}")
@@ -220,7 +255,13 @@ if uploaded_file:
             
             # Procesar cada PDF
             for idx, archivo_pdf in enumerate(archivos_pdf, 1):
+                # Mostrar progreso de procesamiento para cada PDF
+                pdf_process_placeholder = st.empty()
+                with pdf_process_placeholder:
+                    mostrar_loading_pdf(1)
+                
                 df_temp = procesar_pdf_a_dataframe(archivo_pdf)
+                pdf_process_placeholder.empty()  # Limpiar loading de PDF
                 
                 if df_temp.empty:
                     st.warning(f" No se pudieron extraer datos del PDF {idx}: {archivo_pdf.name}")
@@ -273,8 +314,13 @@ if uploaded_file:
                 """, unsafe_allow_html=True)
                 
                 # NUEVA FUNCIONALIDAD: Detectar y corregir registros incompletos
-                from pdf_processor import detectar_registros_incompletos, filtrar_registros_sin_asistencia
-                from ui_components import mostrar_editor_registros_incompletos, aplicar_correcciones_a_dataframe
+                from pdf_processor import detectar_registros_incompletos, filtrar_registros_sin_asistencia, detectar_horarios_ambiguos
+                from ui_components import (
+                    mostrar_editor_registros_incompletos, 
+                    aplicar_correcciones_a_dataframe,
+                    mostrar_editor_horarios_ambiguos,
+                    aplicar_correcciones_ambiguos_a_dataframe
+                )
                 
                 # Primero, filtrar registros sin asistencia (sin entrada ni salida = no trabajó)
                 df_con_asistencia, df_sin_asistencia = filtrar_registros_sin_asistencia(df_combinado)
@@ -305,8 +351,7 @@ if uploaded_file:
                         st.success(f"✅ {len(df_incompletos)} registro(s) corregido(s) exitosamente")
                         
                         # Limpiar session state de correcciones
-                        if 'correcciones_horarios' in st.session_state:
-                            del st.session_state.correcciones_horarios
+                        _limpiar_session_state_correcciones()
                     else:
                         # Detener ejecución hasta que se apliquen las correcciones
                         st.warning(" Completa los datos faltantes y presiona 'Aplicar Correcciones' para continuar")
@@ -315,12 +360,29 @@ if uploaded_file:
                 # Usar el DataFrame con asistencia para los cálculos
                 df_combinado = df_con_asistencia
                 
+                # NUEVA FUNCIONALIDAD: Detectar horarios ambiguos en PDFs
+                df_ambiguos_pdf = detectar_horarios_ambiguos(df_combinado)
+                
+                if not df_ambiguos_pdf.empty:
+                    st.markdown(f"""
+                    <div class="custom-alert alert-info">
+                        🤔 <strong>{len(df_ambiguos_pdf)} registro(s) con horarios sospechosos</strong><br>
+                        Se detectaron horarios que podrían estar mal asignados en los PDFs procesados.
+                    </div>
+                    """, unsafe_allow_html=True)
+                    
+                    correcciones_ambiguos_pdf_aplicadas, _ = mostrar_editor_horarios_ambiguos(df_ambiguos_pdf)
+                    
+                    if correcciones_ambiguos_pdf_aplicadas:
+                        df_combinado = aplicar_correcciones_ambiguos_a_dataframe(df_combinado, df_ambiguos_pdf)
+                        st.success(f"✅ Se corrigieron {len(df_ambiguos_pdf)} registro(s) con horarios ambiguos")
+                
                 # Procesar con la lógica existente
                 calc_pdf_placeholder = st.empty()
                 with calc_pdf_placeholder:
                     mostrar_loading_calculos()
-                
-                resultados, total_horas, total_sueldos = procesar_datos_excel(
+
+                resultados, total_horas, total_sueldos, total_horas_normales, total_horas_especiales = procesar_datos_excel(
                     df_combinado, valor_por_hora, opcion_feriados, dias_feriados, cantidad_feriados
                 )
                 calc_pdf_placeholder.empty()  # Limpiar loading
@@ -334,7 +396,7 @@ if uploaded_file:
                 else:
                     nombre_excel = None
                 
-                mostrar_resultados(resultados, total_horas, total_sueldos, valor_por_hora, dias_feriados, nombre_excel)
+                mostrar_resultados(resultados, total_horas, total_sueldos, total_horas_normales, total_horas_especiales, valor_por_hora, dias_feriados, nombre_excel)
     
     st.markdown('</div>', unsafe_allow_html=True)
 

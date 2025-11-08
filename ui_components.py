@@ -6,6 +6,13 @@ import streamlit as st
 import calendar
 from datetime import datetime
 
+def _safe_session_state_update(key, value):
+    """
+    Actualiza el session_state de forma segura para evitar conflictos del DOM
+    """
+    if key not in st.session_state or st.session_state[key] != value:
+        st.session_state[key] = value
+
 def mostrar_input_valor_hora():
     """
     Muestra el input para el valor por hora con estilo mejorado
@@ -34,14 +41,22 @@ def mostrar_descarga_plantilla():
     </div>
     """, unsafe_allow_html=True)
     
-    with open("plantilla_sueldos_feriados_dias.xlsx", "rb") as f:
-        st.download_button(
-            "Descargar Plantilla Excel", 
-            f, 
-            file_name="plantilla_sueldo.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            help="Descarga la plantilla oficial para cargar datos de empleados"
-        )
+    # Obtener la ruta del archivo de plantilla
+    import os
+    plantilla_path = os.path.join(os.path.dirname(__file__), "plantilla_sueldos_feriados_dias.xlsx")
+    
+    # Verificar si el archivo existe
+    if os.path.exists(plantilla_path):
+        with open(plantilla_path, "rb") as f:
+            st.download_button(
+                "Descargar Plantilla Excel", 
+                f, 
+                file_name="plantilla_sueldo.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                help="Descarga la plantilla oficial para cargar datos de empleados"
+            )
+    else:
+        st.warning("⚠️ Archivo de plantilla no encontrado. Usa el formato estándar de Excel con las columnas: Empleado, Fecha, Entrada, Salida, Descuento Inventario, Descuento Caja, Retiro")
 
 def configurar_feriados():
     """
@@ -190,138 +205,377 @@ def mostrar_subida_archivo():
             st.error(" Máximo 2 archivos PDF permitidos (uno por cada quincena)")
             return None, "pdf"
         
-        # Mostrar información de archivos subidos
+        # Mostrar información de archivos subidos de forma compacta
         if archivos:
-            st.markdown("###  Archivos Cargados:")
-            for idx, archivo in enumerate(archivos, 1):
-                st.success(f" PDF {idx}: {archivo.name}")
+            # Crear lista compacta de archivos
+            nombres_archivos = [f"PDF {idx}: {archivo.name}" for idx, archivo in enumerate(archivos, 1)]
+            archivos_texto = " | ".join(nombres_archivos)
+            
+            st.markdown(f"""
+            <div style="
+                background-color: #d4edda; 
+                border: 1px solid #c3e6cb; 
+                border-radius: 6px; 
+                padding: 8px 12px; 
+                margin: 8px 0;
+                font-size: 14px;
+                color: #155724;
+                display: flex;
+                align-items: center;
+                flex-wrap: wrap;
+                gap: 8px;
+            ">
+                <span style="font-weight: 600;">📁 Cargados:</span>
+                <span style="word-break: break-all;">{archivos_texto}</span>
+            </div>
+            """, unsafe_allow_html=True)
         
         return archivos, "pdf"
 
 
 def mostrar_editor_registros_incompletos(df_incompletos):
     """
-    Muestra una interfaz para completar registros con entrada o salida faltante.
-    NOTA: Solo muestra registros donde falta UNO de los dos datos.
-    Si faltan ambos, se excluyen automáticamente).
+    Muestra una interfaz simplificada y estable para completar registros incompletos.
+    Evita conflictos del DOM usando una estructura más simple.
     
     Args:
-        df_incompletos: DataFrame con registros incompletos (falta solo entrada o solo salida)
+        df_incompletos: DataFrame con registros incompletos
         
     Returns:
         bool: True si se aplicaron correcciones, False si aún están pendientes
     """
     import pandas as pd
-    from datetime import datetime
+    from datetime import datetime, timedelta
+    
+    # Forzar limpieza de caché para evitar problemas de duplicación
+    st.cache_data.clear()
     
     if df_incompletos.empty:
-        return df_incompletos
+        return True
     
     st.markdown("""
     <div class="custom-alert alert-warning">
-        <strong> Registros Incompletos Detectados</strong><br>
-        El empleado no marco su entrada o salida 
-        Completa los datos faltantes para calcular las horas trabajadas.
+        <strong>🔍 Registros Incompletos Detectados</strong><br>
+        Empleados que marcaron solo <strong>UNA VEZ</strong> en el día. Usa los controles desplegables para completar.
     </div>
     """, unsafe_allow_html=True)
     
-    st.markdown("###  Completar Datos Faltantes")
+    st.markdown("### 👨‍💼 Panel de Corrección Administrativa")
     
-    st.markdown("""
-    <div class="custom-alert alert-info">
-         <strong>Nota:</strong> Los registros sin entrada NI salida se excluyen automáticamente 
-    </div>
-    """, unsafe_allow_html=True)
-    
-    # Inicializar session_state para las correcciones si no existe
+    # Inicializar session_state de forma más limpia
     if 'correcciones_horarios' not in st.session_state:
         st.session_state.correcciones_horarios = {}
     
-    # Mostrar cada registro incompleto
+    # Inicializar contador de cambios para evitar problemas DOM
+    if 'cambios_contador' not in st.session_state:
+        st.session_state.cambios_contador = {}
+    
+    registros_completos = 0
+    
+    # Procesar cada registro de forma más simple
     for idx, row in df_incompletos.iterrows():
+        horario_registrado = row.get('Horario_Registrado', 'No disponible')
+        tipo_problema = row.get('Tipo_Problema', 'Problema no identificado')
+        
         with st.expander(
-            f"👤 {row['Empleado']} -  {row['Fecha']} -  Falta: {row['Dato_Faltante']}", 
+            f"👤 {row['Empleado']} - 📅 {row['Fecha']} - ⏰ {horario_registrado}", 
             expanded=True
         ):
-            col1, col2, col3 = st.columns([2, 2, 1])
+            # Información del problema (sin sugerencias automáticas)
+            st.markdown(f"""
+            <div class="custom-alert alert-info">
+                <strong>📊 Situación:</strong> {tipo_problema}<br>
+                <strong>⏰ Horario registrado:</strong> {horario_registrado}<br>
+                <strong>👨‍� Decisión:</strong> El administrador decide si fue entrada o salida
+            </div>
+            """, unsafe_allow_html=True)
+            
+            # Evitar recreación excesiva de elementos del DOM
+            col1, col2 = st.columns([1, 1])
             
             with col1:
-                # Input para Entrada (considerar 0:00 como faltante)
-                entrada_actual = str(row['Entrada']).strip()
-                entrada_es_valida = (
-                    pd.notna(row['Entrada']) and 
-                    entrada_actual != '' and 
-                    entrada_actual not in ['0:00', '00:00', 'nan']
-                )
+                st.markdown("**1️⃣ ¿Qué tipo de marca fue?**")
                 
-                if 'Entrada' in row['Dato_Faltante']:
-                    # Necesita completar entrada
-                    st.markdown(" **Hora de Entrada** ⚠️ *Faltante*")
-                    if entrada_actual in ['0:00', '00:00']:
-                        st.caption(f"Valor actual: {entrada_actual} (inválido)")
-                    entrada_key = f"entrada_{idx}"
-                    entrada_corregida = st.time_input(
-                        "Ingresa la hora de entrada:",
-                        value=datetime.strptime("08:00", "%H:%M").time(),
-                        key=entrada_key,
-                        help="Hora aproximada en que el empleado ingresó"
-                    )
-                    st.session_state.correcciones_horarios[f"{idx}_entrada"] = entrada_corregida.strftime("%H:%M")
-                else:
-                    # Ya tiene entrada válida
-                    st.markdown(f" **Hora de Entrada:** {entrada_actual} ")
+                # Clave única para evitar conflictos
+                select_key = f"tipo_select_{idx}_{row['Empleado'].replace(' ', '_')}"
+                
+                tipo_decision = st.selectbox(
+                    f"El horario {horario_registrado} fue:",
+                    options=['Entrada', 'Salida'],
+                    key=select_key,
+                    help="Decide si el empleado estaba llegando (Entrada) o saliendo (Salida)"
+                )
             
             with col2:
-                # Input para Salida (considerar 0:00 como faltante)
-                salida_actual = str(row['Salida']).strip()
-                salida_es_valida = (
-                    pd.notna(row['Salida']) and 
-                    salida_actual != '' and 
-                    salida_actual not in ['0:00', '00:00', 'nan']
-                )
+                st.markdown("**2️⃣ Completar horario faltante**")
                 
-                if 'Salida' in row['Dato_Faltante']:
-                    # Necesita completar salida
-                    st.markdown(" **Hora de Salida**  *Faltante*")
-                    if salida_actual in ['0:00', '00:00']:
-                        st.caption(f"Valor actual: {salida_actual} (inválido)")
-                    salida_key = f"salida_{idx}"
+                # Usar un contenedor estático para mostrar el estado
+                estado_placeholder = st.empty()
+                
+                # Determinar qué mostrar basado en la selección actual
+                if tipo_decision == 'Entrada':
+                    estado_content = f"""
+                    <div style='margin-bottom: 10px;'>
+                        <div style='background-color: #d1ecf1; padding: 8px; border-radius: 4px; margin-bottom: 5px;'>
+                            ✅ <strong>Entrada:</strong> {horario_registrado}
+                        </div>
+                        <div style='background-color: #f8d7da; padding: 8px; border-radius: 4px;'>
+                            ❌ <strong>Salida:</strong> Faltante
+                        </div>
+                    </div>
+                    """
+                else:  # tipo_decision == 'Salida'
+                    estado_content = f"""
+                    <div style='margin-bottom: 10px;'>
+                        <div style='background-color: #f8d7da; padding: 8px; border-radius: 4px; margin-bottom: 5px;'>
+                            ❌ <strong>Entrada:</strong> Faltante
+                        </div>
+                        <div style='background-color: #d1ecf1; padding: 8px; border-radius: 4px;'>
+                            ✅ <strong>Salida:</strong> {horario_registrado}
+                        </div>
+                    </div>
+                    """
+                
+                # Mostrar el estado usando HTML estático
+                estado_placeholder.markdown(estado_content, unsafe_allow_html=True)
+            
+            # Formulario para la entrada de datos y confirmación (sin sugerencias automáticas)
+            with st.form(key=f"form_registro_{idx}"):
+                if tipo_decision == 'Entrada':
+                    # Necesita completar la salida - administrador decide completamente
                     salida_corregida = st.time_input(
                         "Ingresa la hora de salida:",
                         value=datetime.strptime("17:00", "%H:%M").time(),
-                        key=salida_key,
-                        help="Hora aproximada en que el empleado salió"
+                        key=f"time_salida_{idx}",
+                        help="Hora en que el empleado salió"
                     )
-                    st.session_state.correcciones_horarios[f"{idx}_salida"] = salida_corregida.strftime("%H:%M")
-                else:
-                    # Ya tiene salida
-                    st.markdown(f" **Hora de Salida:** {salida_actual} ")
+                    entrada_final = horario_registrado
+                    salida_final = salida_corregida.strftime("%H:%M")
+                    
+                else:  # tipo_decision == 'Salida'
+                    # Necesita completar la entrada - administrador decide completamente
+                    entrada_corregida = st.time_input(
+                        "Ingresa la hora de entrada:",
+                        value=datetime.strptime("08:00", "%H:%M").time(),
+                        key=f"time_entrada_{idx}",
+                        help="Hora en que el empleado ingresó"
+                    )
+                    entrada_final = entrada_corregida.strftime("%H:%M")
+                    salida_final = horario_registrado
+                
+                # Botón para confirmar este registro
+                if st.form_submit_button(f"✅ Confirmar Registro {idx+1}", use_container_width=True):
+                    # Guardar las correcciones
+                    st.session_state.correcciones_horarios[f"{idx}_entrada"] = entrada_final
+                    st.session_state.correcciones_horarios[f"{idx}_salida"] = salida_final
+                    st.session_state.correcciones_horarios[f"{idx}_confirmado"] = True
+                    
+                    # Mostrar confirmación
+                    horas_estimadas = _calcular_horas_trabajadas(entrada_final, salida_final)
+                    st.success(f"✅ Registro confirmado: {entrada_final} → {salida_final} ({horas_estimadas})")
+                    st.rerun()
             
-            with col3:
-                st.markdown("**Estado**")
-                if f"{idx}_entrada" in st.session_state.correcciones_horarios or f"{idx}_salida" in st.session_state.correcciones_horarios:
-                    st.success(" Listo")
-                else:
-                    st.warning(" Pendiente")
+            # Mostrar estado actual si ya está confirmado
+            if st.session_state.correcciones_horarios.get(f"{idx}_confirmado", False):
+                entrada_conf = st.session_state.correcciones_horarios.get(f"{idx}_entrada")
+                salida_conf = st.session_state.correcciones_horarios.get(f"{idx}_salida")
+                
+                if entrada_conf and salida_conf:
+                    horas_estimadas = _calcular_horas_trabajadas(entrada_conf, salida_conf)
+                    st.markdown(f"""
+                    <div class="custom-alert alert-success">
+                        <strong>✅ Registro Confirmado:</strong><br>
+                        📥 Entrada: {entrada_conf} | 📤 Salida: {salida_conf}<br>
+                        ⏱️ <strong>Horas: {horas_estimadas}</strong>
+                    </div>
+                    """, unsafe_allow_html=True)
+                    registros_completos += 1
     
-    # Botón para aplicar correcciones
+    # Verificar progreso
     st.markdown("---")
-    if st.button(" Aplicar Correcciones y Continuar", type="primary", use_container_width=True):
-        return True
+    st.markdown(f"### 📊 Progreso: {registros_completos}/{len(df_incompletos)} registros completados")
+    
+    # Botón final para continuar
+    if registros_completos == len(df_incompletos):
+        if st.button("🚀 Continuar con el Cálculo", type="primary", use_container_width=True):
+            return True
+    else:
+        st.warning(f"⚠️ Confirma {len(df_incompletos) - registros_completos} registro(s) restante(s)")
     
     return False
 
 
+# Funciones de sugerencias automáticas eliminadas - administrador tiene control total
+
+
+def _calcular_horas_trabajadas(entrada_str: str, salida_str: str) -> str:
+    """Calcula las horas trabajadas entre entrada y salida"""
+    try:
+        from datetime import datetime, timedelta
+        entrada = datetime.strptime(entrada_str.strip(), "%H:%M")
+        salida = datetime.strptime(salida_str.strip(), "%H:%M")
+        
+        # Si la salida es menor que la entrada, asumimos que cruzó medianoche
+        if salida < entrada:
+            salida += timedelta(days=1)
+        
+        diferencia = salida - entrada
+        horas = diferencia.total_seconds() / 3600
+        
+        horas_enteras = int(horas)
+        minutos = int((horas - horas_enteras) * 60)
+        
+        return f"{horas_enteras}h {minutos}m"
+    except:
+        return "Error en cálculo"
+
+
+def mostrar_editor_horarios_ambiguos(df_ambiguos):
+    """
+    Muestra una interfaz para revisar horarios que podrían estar mal asignados
+    (por ejemplo, entrada muy tarde o salida muy temprano)
+    
+    Args:
+        df_ambiguos: DataFrame con registros ambiguos
+        
+    Returns:
+        tuple: (correcciones_aplicadas, df_corregido)
+    """
+    import pandas as pd
+    from datetime import datetime
+    
+    if df_ambiguos.empty:
+        return False, df_ambiguos
+    
+    st.markdown("""
+    <div class="custom-alert alert-info">
+        <strong>🤔 Horarios Sospechosos Detectados</strong><br>
+        Se detectaron horarios que podrían estar <strong>mal asignados</strong>. 
+        Revisa si la entrada y salida están correctamente asignadas.
+    </div>
+    """, unsafe_allow_html=True)
+    
+    st.markdown("### 🔍 Revisión de Horarios Ambiguos")
+    
+    # Inicializar session_state para correcciones de ambiguos
+    if 'correcciones_ambiguos' not in st.session_state:
+        st.session_state.correcciones_ambiguos = {}
+    
+    correcciones_realizadas = False
+    
+    for idx, row in df_ambiguos.iterrows():
+        with st.expander(
+            f"⚠️ {row['Empleado']} - 📅 {row['Fecha']} - {row['Razon_Sospecha'][:50]}...", 
+            expanded=True
+        ):
+            st.markdown(f"""
+            <div class="custom-alert alert-warning">
+                <strong>🚨 Problema detectado:</strong><br>
+                {row['Razon_Sospecha']}
+            </div>
+            """, unsafe_allow_html=True)
+            
+            col1, col2, col3 = st.columns([1, 1, 1])
+            
+            with col1:
+                st.markdown("**📊 Horarios Actuales:**")
+                st.info(f"🔘 Entrada: {row['Entrada_Original']}")
+                st.info(f"🔘 Salida: {row['Salida_Original']}")
+            
+            with col2:
+                st.markdown("**🔄 ¿Intercambiar horarios?**")
+                
+                intercambiar_key = f"intercambiar_{idx}"
+                intercambiar = st.checkbox(
+                    "Sí, intercambiar entrada ↔ salida",
+                    key=intercambiar_key,
+                    help="Marca esto si crees que los horarios están invertidos"
+                )
+                
+                if intercambiar:
+                    st.success(f"✅ Nuevo orden:")
+                    st.success(f"📥 Entrada: {row['Salida_Original']}")
+                    st.success(f"📤 Salida: {row['Entrada_Original']}")
+                    
+                    # Guardar la corrección
+                    st.session_state.correcciones_ambiguos[idx] = {
+                        'nueva_entrada': row['Salida_Original'],
+                        'nueva_salida': row['Entrada_Original']
+                    }
+                    correcciones_realizadas = True
+                else:
+                    # Mantener original
+                    if idx in st.session_state.correcciones_ambiguos:
+                        del st.session_state.correcciones_ambiguos[idx]
+            
+            with col3:
+                st.markdown("**⏱️ Horas resultantes:**")
+                if intercambiar:
+                    horas_nuevas = _calcular_horas_trabajadas(row['Salida_Original'], row['Entrada_Original'])
+                    st.metric("Nuevas horas", horas_nuevas)
+                else:
+                    horas_actuales = _calcular_horas_trabajadas(row['Entrada_Original'], row['Salida_Original'])
+                    st.metric("Horas actuales", horas_actuales)
+    
+    # Botón para aplicar correcciones de ambiguos
+    if correcciones_realizadas:
+        st.markdown("---")
+        if st.button("🔄 Aplicar Intercambios de Horarios", type="secondary", use_container_width=True):
+            return True, df_ambiguos
+    
+    return False, df_ambiguos
+
+
+def aplicar_correcciones_ambiguos_a_dataframe(df_original, df_ambiguos):
+    """
+    Aplica las correcciones de horarios ambiguos al DataFrame original
+    
+    Args:
+        df_original: DataFrame original
+        df_ambiguos: DataFrame con registros ambiguos
+        
+    Returns:
+        DataFrame: DataFrame con intercambios aplicados
+    """
+    import pandas as pd
+    
+    df_corregido = df_original.copy()
+    
+    if 'correcciones_ambiguos' not in st.session_state:
+        return df_corregido
+    
+    intercambios_aplicados = 0
+    
+    for idx, correcciones in st.session_state.correcciones_ambiguos.items():
+        df_corregido.at[idx, 'Entrada'] = correcciones['nueva_entrada']
+        df_corregido.at[idx, 'Salida'] = correcciones['nueva_salida']
+        intercambios_aplicados += 1
+    
+    if intercambios_aplicados > 0:
+        st.markdown(f"""
+        <div class="custom-alert alert-success">
+            <strong>🔄 Intercambios Aplicados</strong><br>
+            Se intercambiaron los horarios en {intercambios_aplicados} registro(s).
+        </div>
+        """, unsafe_allow_html=True)
+        
+        # Limpiar session state
+        if 'correcciones_ambiguos' in st.session_state:
+            del st.session_state.correcciones_ambiguos
+    
+    return df_corregido
+
+
 def aplicar_correcciones_a_dataframe(df_original, df_incompletos):
     """
-    Aplica las correcciones manuales al DataFrame original
+    Aplica las correcciones manuales al DataFrame original, incluyendo decisiones administrativas
     
     Args:
         df_original: DataFrame original con todos los datos
         df_incompletos: DataFrame con registros incompletos
         
     Returns:
-        DataFrame: DataFrame corregido
+        DataFrame: DataFrame corregido con horarios completos
     """
     import pandas as pd
     
@@ -330,12 +584,34 @@ def aplicar_correcciones_a_dataframe(df_original, df_incompletos):
     if 'correcciones_horarios' not in st.session_state:
         return df_corregido
     
-    # Aplicar correcciones
+    # Aplicar correcciones basadas en decisiones administrativas
+    correcciones_aplicadas = 0
+    
     for idx in df_incompletos.index:
+        entrada_corregida = False
+        salida_corregida = False
+        
+        # Aplicar entrada corregida
         if f"{idx}_entrada" in st.session_state.correcciones_horarios:
             df_corregido.at[idx, 'Entrada'] = st.session_state.correcciones_horarios[f"{idx}_entrada"]
+            entrada_corregida = True
         
+        # Aplicar salida corregida
         if f"{idx}_salida" in st.session_state.correcciones_horarios:
             df_corregido.at[idx, 'Salida'] = st.session_state.correcciones_horarios[f"{idx}_salida"]
+            salida_corregida = True
+        
+        if entrada_corregida or salida_corregida:
+            correcciones_aplicadas += 1
+    
+    # Mostrar resumen de correcciones aplicadas
+    if correcciones_aplicadas > 0:
+        st.markdown(f"""
+        <div class="custom-alert alert-success">
+            <strong>✅ Correcciones Aplicadas Exitosamente</strong><br>
+            Se corrigieron {correcciones_aplicadas} registro(s) con decisiones administrativas.<br>
+            Los horarios faltantes han sido completados según tus especificaciones.
+        </div>
+        """, unsafe_allow_html=True)
     
     return df_corregido

@@ -172,14 +172,33 @@ def mostrar_progreso_con_porcentaje(porcentaje, texto="Procesando"):
         porcentaje: Valor de 0 a 100
         texto: Texto a mostrar
     """
-    st.markdown(f"""
+    st.markdown(get_progress_html(porcentaje, texto), unsafe_allow_html=True)
+
+def get_progress_html(porcentaje, texto="Procesando"):
+    """
+    Genera el HTML de la barra de progreso para poder renderizarlo desde placeholders.
+
+    Args:
+        porcentaje: Valor de 0 a 100
+        texto: Texto a mostrar
+
+    Returns:
+        str: HTML como cadena
+    """
+    # Asegurar rango válido
+    try:
+        porcentaje_int = max(0, min(100, int(porcentaje)))
+    except Exception:
+        porcentaje_int = 0
+
+    return f"""
     <div class="loading-container">
         <div class="loading-text">{texto}</div>
         <div style="width: 100%; background: #E3F2FD; border-radius: 10px; height: 30px; position: relative; margin-top: 1rem;">
-            <div style="width: {porcentaje}%; background: linear-gradient(90deg, #4FC3F7, #81D4FA); height: 100%; border-radius: 10px; transition: width 0.3s ease;"></div>
+            <div style="width: {porcentaje_int}%; background: linear-gradient(90deg, #4FC3F7, #81D4FA); height: 100%; border-radius: 10px; transition: width 0.3s ease;"></div>
             <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-weight: 600; color: #000;">
-                {porcentaje}%
+                {porcentaje_int}%
             </div>
         </div>
     </div>
-    """, unsafe_allow_html=True)
+    """

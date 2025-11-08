@@ -7,6 +7,120 @@ import streamlit as st
 import io
 from datetime import datetime, timedelta
 from calculations import calcular_horas_especiales, horas_a_horasminutos
+from loading_components import get_progress_html
+
+def detectar_y_resolver_marcaciones_duplicadas(df):
+    """
+    Detecta cuando un empleado marcó 3 veces en un mismo día y selecciona automáticamente 
+    solo 2 marcas, eliminando duplicados que estén en el mismo rango de tiempo (10-20 minutos).
+    
+    Args:
+        df (DataFrame): DataFrame con los datos originales
+        
+    Returns:
+        DataFrame: DataFrame procesado con marcaciones duplicadas resueltas
+    """
+    df_procesado = df.copy()
+    registros_procesados = []
+    empleados_con_duplicados = []
+    
+    # Agrupar por empleado y fecha
+    for (empleado, fecha), grupo in df_procesado.groupby(['Empleado', 'Fecha']):
+        if len(grupo) == 3:
+            # Empleado marcó 3 veces el mismo día
+            empleados_con_duplicados.append(f"{empleado} - {fecha}")
+            
+            # Convertir las marcaciones a datetime para comparar
+            marcaciones = []
+            for idx, row in grupo.iterrows():
+                try:
+                    entrada = pd.to_datetime(str(row["Entrada"])).time()
+                    salida = pd.to_datetime(str(row["Salida"])).time()
+                    fecha_dt = pd.to_datetime(row["Fecha"])
+                    
+                    entrada_dt = datetime.combine(fecha_dt, entrada)
+                    salida_dt = datetime.combine(fecha_dt, salida)
+                    
+                    marcaciones.append({
+                        'index': idx,
+                        'entrada': entrada_dt,
+                        'salida': salida_dt,
+                        'row': row
+                    })
+                except:
+                    # Si hay error en conversión, mantener el registro
+                    marcaciones.append({
+                        'index': idx,
+                        'entrada': None,
+                        'salida': None,
+                        'row': row
+                    })
+            
+            # Encontrar duplicados basados en rangos de tiempo (10-20 minutos)
+            duplicados_encontrados = []
+            for i in range(len(marcaciones)):
+                for j in range(i + 1, len(marcaciones)):
+                    marc1 = marcaciones[i]
+                    marc2 = marcaciones[j]
+                    
+                    if marc1['entrada'] and marc2['entrada']:
+                        # Calcular diferencia en minutos para entrada
+                        diff_entrada = abs((marc1['entrada'] - marc2['entrada']).total_seconds() / 60)
+                        # Calcular diferencia en minutos para salida
+                        diff_salida = abs((marc1['salida'] - marc2['salida']).total_seconds() / 60)
+                        
+                        # Si ambas diferencias están entre 10 y 20 minutos, son duplicados
+                        if (10 <= diff_entrada <= 20) and (10 <= diff_salida <= 20):
+                            duplicados_encontrados.append((i, j))
+            
+            # NUEVA LÓGICA SIMPLIFICADA: Crear marcación óptima combinando lo mejor de todas
+            # Encontrar la entrada más temprana y la salida más tardía entre todas las marcaciones
+            entrada_mas_temprana = min(marcaciones, key=lambda x: x['entrada'])
+            salida_mas_tardia = max(marcaciones, key=lambda x: x['salida'])
+            
+            # Crear primera marcación con entrada más temprana y salida más tardía
+            marcacion_principal = entrada_mas_temprana['row'].copy()
+            marcacion_principal['Entrada'] = entrada_mas_temprana['entrada'].strftime("%H:%M")
+            marcacion_principal['Salida'] = salida_mas_tardia['salida'].strftime("%H:%M")
+            
+            registros_procesados.append(marcacion_principal)
+            
+            # Buscar una segunda marcación que no sea duplicado de la principal
+            segunda_marcacion = None
+            for marc in marcaciones:
+                # Verificar que no sea duplicado de la marcación principal
+                diff_entrada = abs((marc['entrada'] - entrada_mas_temprana['entrada']).total_seconds() / 60)
+                diff_salida = abs((marc['salida'] - salida_mas_tardia['salida']).total_seconds() / 60)
+                
+                # Si no es duplicado (diferencia > 20 minutos), usar como segunda marcación
+                if diff_entrada > 20 or diff_salida > 20:
+                    segunda_marcacion = marc['row']
+                    break
+            
+            # Si encontramos una segunda marcación válida, agregarla
+            if segunda_marcacion is not None:
+                registros_procesados.append(segunda_marcacion)
+            else:
+                # Si no hay segunda marcación válida, usar la marcación del medio
+                if len(marcaciones) >= 2:
+                    # Ordenar por entrada y tomar la del medio
+                    marcaciones_ordenadas = sorted(marcaciones, key=lambda x: x['entrada'])
+                    registros_procesados.append(marcaciones_ordenadas[1]['row'])
+                    
+        else:
+            # Empleado marcó 1 o 2 veces - mantener todos los registros
+            for idx, row in grupo.iterrows():
+                registros_procesados.append(row)
+    
+    # Mostrar información sobre empleados con duplicados procesados
+    if empleados_con_duplicados:
+        st.info(f"🔍 **Marcaciones duplicadas detectadas y resueltas automáticamente:**\n\n" + 
+                "\n".join([f"• {emp}" for emp in empleados_con_duplicados]))
+    
+    # Crear nuevo DataFrame con los registros procesados
+    df_resultado = pd.DataFrame(registros_procesados)
+    
+    return df_resultado
 
 def validar_archivo_excel(df):
     """
@@ -34,13 +148,18 @@ def procesar_datos_excel(df, valor_por_hora, opcion_feriados, fechas_feriados, c
         cantidad_feriados (int): No usado, mantener por compatibilidad
         
     Returns:
-        tuple: (resultados, total_horas, total_sueldos)
+        tuple: (resultados, total_horas, total_sueldos, total_horas_normales, total_horas_especiales)
     """
+    # NUEVO: Primero resolver marcaciones duplicadas
+    df_procesado = detectar_y_resolver_marcaciones_duplicadas(df)
+    
     resultados = []
     total_horas = 0
     total_sueldos = 0
+    total_horas_normales = 0  # NUEVO: Total de horas normales
+    total_horas_especiales = 0  # NUEVO: Total de horas especiales
 
-    for idx, row in df.iterrows():
+    for idx, row in df_procesado.iterrows():
         try:
             resultado_fila = _procesar_fila(row, idx, valor_por_hora, fechas_feriados)
             
@@ -48,15 +167,20 @@ def procesar_datos_excel(df, valor_por_hora, opcion_feriados, fechas_feriados, c
                 resultados.append(resultado_fila["datos"])
                 total_horas += resultado_fila["horas"]
                 total_sueldos += resultado_fila["sueldo"]
+                
+                # NUEVO: Acumular horas normales y especiales
+                total_horas_normales += resultado_fila.get("horas_normales", 0)
+                total_horas_especiales += resultado_fila.get("horas_especiales", 0)
 
         except Exception as e:
             st.error(f"Error en la fila {idx+2}: {e}")
 
-    return resultados, total_horas, total_sueldos
+    return resultados, total_horas, total_sueldos, total_horas_normales, total_horas_especiales
 
 def _procesar_fila(row, idx, valor_por_hora, fechas_feriados):
     """
     Procesa una fila individual del Excel con lógica completa:
+    - Validación de horario laboral (10:30 AM - 22:00 PM)
     - Horas normales × tarifa
     - Horas especiales (20:00-22:00) × tarifa × 1.3
     - Factor de feriado ×2 si aplica
@@ -78,6 +202,38 @@ def _procesar_fila(row, idx, valor_por_hora, fechas_feriados):
     salida_dt = datetime.combine(fecha, salida)
     if salida_dt < entrada_dt:
         salida_dt += timedelta(days=1)
+
+    # NUEVA VALIDACIÓN: Verificar horario laboral (10:30 AM - 22:00 PM)
+    hora_inicio_laboral = datetime.combine(fecha, datetime.strptime("10:30", "%H:%M").time())
+    hora_fin_laboral = datetime.combine(fecha, datetime.strptime("22:00", "%H:%M").time())
+    
+    # Validar que la entrada esté dentro del horario laboral
+    if entrada_dt < hora_inicio_laboral or entrada_dt > hora_fin_laboral:
+        # Si está fuera del horario, no se calcula - retornar registro con 0 horas
+        return {
+            "datos": {
+                "Empleado": row["Empleado"],
+                "Fecha": fecha.strftime("%Y-%m-%d"),
+                "Entrada": entrada.strftime("%H:%M"),
+                "Salida": salida.strftime("%H:%M"),
+                "Feriado": "No",
+                "Horas Trabajadas (h:mm)": "0:00",
+                "Horas Normales": "0:00",
+                "Horas Especiales": "0:00",
+                "Descuento Inventario": 0,
+                "Descuento Caja": 0,
+                "Retiro": 0,
+                "Sueldo Final": 0,
+                "Observaciones": f"Fuera de horario laboral (10:30-22:00)"
+            },
+            "horas": 0,
+            "sueldo": 0
+        }
+    
+    # Validar que la salida también esté dentro del rango permitido
+    if salida_dt > hora_fin_laboral + timedelta(days=1 if salida_dt.date() > entrada_dt.date() else 0):
+        # Ajustar salida al máximo permitido
+        salida_dt = hora_fin_laboral
 
     # Calcular horas trabajadas en decimal
     horas_trabajadas_decimal = (salida_dt - entrada_dt).total_seconds() / 3600
@@ -121,10 +277,12 @@ def _procesar_fila(row, idx, valor_por_hora, fechas_feriados):
     return {
         "datos": datos_fila,
         "horas": horas_trabajadas_decimal,
-        "sueldo": sueldo_final
+        "sueldo": sueldo_final,
+        "horas_normales": horas_normales,  # NUEVO: Para los totales
+        "horas_especiales": horas_especiales  # NUEVO: Para los totales
     }
 
-def mostrar_resultados(resultados, total_horas, total_sueldos, valor_por_hora=None, fechas_feriados=None, nombre_archivo=None):
+def mostrar_resultados(resultados, total_horas, total_sueldos, total_horas_normales=0, total_horas_especiales=0, valor_por_hora=None, fechas_feriados=None, nombre_archivo=None):
     """
     Muestra los resultados en la interfaz y proporciona descarga
     
@@ -132,6 +290,8 @@ def mostrar_resultados(resultados, total_horas, total_sueldos, valor_por_hora=No
         resultados (list): Lista de resultados procesados
         total_horas (float): Total de horas trabajadas
         total_sueldos (float): Total de sueldos calculados
+        total_horas_normales (float): Total de horas normales trabajadas
+        total_horas_especiales (float): Total de horas especiales trabajadas
         valor_por_hora (float): Valor por hora utilizado en cálculos
         fechas_feriados (set): Fechas marcadas como feriados
         nombre_archivo (str): Nombre base para el archivo Excel (opcional)
@@ -152,7 +312,7 @@ def mostrar_resultados(resultados, total_horas, total_sueldos, valor_por_hora=No
 
     # Resumen visual final con métricas mejoradas
     st.markdown("### 📈 Resumen General")
-    col1, col2, col3 = st.columns(3)
+    col1, col2, col3, col4, col5 = st.columns(5)
     
     with col1:
         st.markdown(f"""
@@ -165,12 +325,28 @@ def mostrar_resultados(resultados, total_horas, total_sueldos, valor_por_hora=No
     with col2:
         st.markdown(f"""
         <div class="metric-card">
+            <div class="metric-label">Horas Normales</div>
+            <div class="metric-value">{horas_a_horasminutos(total_horas_normales)}</div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with col3:
+        st.markdown(f"""
+        <div class="metric-card">
+            <div class="metric-label">Horas Especiales</div>
+            <div class="metric-value">{horas_a_horasminutos(total_horas_especiales)}</div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with col4:
+        st.markdown(f"""
+        <div class="metric-card">
             <div class="metric-label">Total Horas</div>
             <div class="metric-value">{horas_a_horasminutos(total_horas)}</div>
         </div>
         """, unsafe_allow_html=True)
     
-    with col3:
+    with col5:
         st.markdown(f"""
         <div class="metric-card">
             <div class="metric-label">Total Sueldos</div>
@@ -197,3 +373,42 @@ def mostrar_resultados(resultados, total_horas, total_sueldos, valor_por_hora=No
         file_name=nombre_excel,
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
+    
+    # Botón de consulta para calculadora de horas
+    st.markdown("---")
+    st.markdown("### 🧮 Verificación de Cálculos")
+    st.markdown("""
+    <div style="text-align: center; margin: 1rem 0;">
+        <p>¿Necesitas verificar los cálculos de horas? Usa nuestra calculadora externa:</p>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        st.markdown(
+            """
+            <div style="text-align: center;">
+                <a href="https://calculadorasonline.com/calculadora-de-horas-minutos-y-segundos-sumar-horas-restar-horas/" target="_blank">
+                    <button style="
+                        background: linear-gradient(90deg, #4FC3F7, #81D4FA);
+                        color: white;
+                        border: none;
+                        border-radius: 8px;
+                        padding: 12px 24px;
+                        font-size: 16px;
+                        font-weight: 600;
+                        cursor: pointer;
+                        box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+                        transition: all 0.3s ease;
+                        text-decoration: none;
+                        display: inline-block;
+                        width: 100%;
+                    " onmouseover="this.style.transform='translateY(-2px)'; this.style.boxShadow='0 6px 12px rgba(0,0,0,0.15)'" 
+                       onmouseout="this.style.transform='translateY(0px)'; this.style.boxShadow='0 4px 8px rgba(0,0,0,0.1)'">
+                        🧮 CONSULTA - Calculadora de Horas
+                    </button>
+                </a>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )

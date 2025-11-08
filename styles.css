@@ -27,10 +27,29 @@
 .main-container {
     background: var(--card-background);
     border-radius: var(--border-radius);
-    padding: 2rem;
-    margin: 1rem 0;
+    padding: 1.5rem;
+    margin: 0.5rem 0;
     box-shadow: var(--shadow);
     border: 1px solid var(--border-color);
+}
+
+/* Responsividad para móviles */
+@media (max-width: 768px) {
+    .main-container {
+        padding: 1rem;
+        margin: 0.25rem 0;
+        border-radius: 8px;
+    }
+    
+    .main-title {
+        font-size: 1.8rem;
+        margin-bottom: 1rem;
+    }
+    
+    .section-card {
+        padding: 1rem;
+        margin: 0.5rem 0;
+    }
 }
 
 /* Titulo principal */
@@ -47,7 +66,7 @@
 .section-card {
     background: var(--card-background);
     border-radius: var(--border-radius);
-    padding: 1.5rem;
+    padding: 1rem;
     margin: 1rem 0;
     box-shadow: var(--shadow);
     border: 1px solid var(--border-color);
@@ -62,14 +81,22 @@
 /* Encabezados de seccion */
 .section-header {
     color: #000000;
-    font-size: 1.25rem;
+    font-size: 1.1rem;
     font-weight: 600;
-    margin-bottom: 1rem;
-    padding-bottom: 0.5rem;
+    margin-bottom: 0.5rem;
+    padding-bottom: 0.25rem;
     border-bottom: 2px solid var(--primary-color);
     display: flex;
     align-items: center;
     gap: 0.5rem;
+}
+
+@media (max-width: 768px) {
+    .section-header {
+        font-size: 1rem;
+        margin-bottom: 0.5rem;
+        padding-bottom: 0.25rem;
+    }
 }
 
 .section-header:before {
@@ -816,6 +843,56 @@ button[kind="secondary"]:hover {
     max-width: 60%;
     margin-left: auto;
     margin-right: auto;
+}
+
+/* Optimización adicional para móviles */
+@media (max-width: 768px) {
+    /* Aumentar ancho en móviles */
+    .stNumberInput, .stTextInput, .stSelectbox, .stDateInput, .stFileUploader {
+        max-width: 100%;
+    }
+    
+    /* Reducir padding general */
+    .stApp > div {
+        padding: 0.5rem !important;
+    }
+    
+    /* Compactar alertas */
+    .custom-alert {
+        padding: 8px 12px !important;
+        margin: 8px 0 !important;
+        font-size: 14px !important;
+    }
+    
+    /* Reducir espaciado entre elementos */
+    .element-container {
+        margin-bottom: 0.5rem !important;
+    }
+    
+    /* Hacer métricas más compactas */
+    .metric-card {
+        padding: 0.75rem !important;
+        margin: 0.25rem 0 !important;
+    }
+    
+    .metric-value {
+        font-size: 1.5rem !important;
+    }
+    
+    .metric-label {
+        font-size: 0.8rem !important;
+    }
+}
+
+/* Optimización para tablets */
+@media (min-width: 769px) and (max-width: 1024px) {
+    .stNumberInput, .stTextInput, .stSelectbox, .stDateInput, .stFileUploader {
+        max-width: 80%;
+    }
+    
+    .main-container {
+        padding: 1.25rem;
+    }
 }
 
 /* Reducir ancho de las secciones principales */

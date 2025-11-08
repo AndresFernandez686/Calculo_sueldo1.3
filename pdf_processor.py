@@ -388,6 +388,9 @@ def detectar_registros_incompletos(df: pd.DataFrame) -> pd.DataFrame:
     Si faltan AMBOS, se considera que el empleado no trabajó ese día y se excluye.
     Considera como "faltante": NaN, vacío, 'nan', '0:00', '00:00'
     
+    Analiza también casos especiales donde el empleado marcó solo una vez 
+    y el sistema no puede determinar si fue entrada o salida.
+    
     Args:
         df: DataFrame con datos de empleados
         
@@ -418,12 +421,100 @@ def detectar_registros_incompletos(df: pd.DataFrame) -> pd.DataFrame:
     # Filtrar registros que necesitan corrección
     df_incompletos = df[necesita_correccion].copy()
     
-    # Agregar columna indicadora
+    # Agregar columna indicadora sin sugerencias automáticas
     df_incompletos['Dato_Faltante'] = ''
-    df_incompletos.loc[entrada_faltante, 'Dato_Faltante'] = 'Entrada'
-    df_incompletos.loc[salida_faltante, 'Dato_Faltante'] = 'Salida'
+    df_incompletos['Horario_Registrado'] = ''
+    df_incompletos['Tipo_Problema'] = ''
+    
+    for idx in df_incompletos.index:
+        row = df_incompletos.loc[idx]
+        
+        if entrada_faltante.loc[idx]:
+            df_incompletos.loc[idx, 'Dato_Faltante'] = 'Entrada'
+            df_incompletos.loc[idx, 'Horario_Registrado'] = str(row['Salida'])
+            df_incompletos.loc[idx, 'Tipo_Problema'] = 'Solo marcó salida'
+            
+        elif salida_faltante.loc[idx]:
+            df_incompletos.loc[idx, 'Dato_Faltante'] = 'Salida'
+            df_incompletos.loc[idx, 'Horario_Registrado'] = str(row['Entrada'])
+            df_incompletos.loc[idx, 'Tipo_Problema'] = 'Solo marcó entrada'
     
     return df_incompletos
+
+
+# Función de análisis automático eliminada - administrador tiene control total
+
+
+def detectar_horarios_ambiguos(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Detecta registros con horarios que podrían ser ambiguos
+    (por ejemplo, marcar a las 22:00 - ¿es entrada o salida?)
+    
+    Esta función complementa detectar_registros_incompletos para casos especiales
+    donde hay entrada Y salida, pero parecen estar mal asignadas.
+    
+    Args:
+        df: DataFrame con datos completos
+        
+    Returns:
+        DataFrame: Registros con posibles asignaciones incorrectas
+    """
+    import pandas as pd
+    from datetime import datetime
+    
+    horarios_ambiguos = []
+    
+    for idx, row in df.iterrows():
+        try:
+            # Verificar que ambos horarios existan
+            if pd.isna(row['Entrada']) or pd.isna(row['Salida']):
+                continue
+                
+            entrada_str = str(row['Entrada']).strip()
+            salida_str = str(row['Salida']).strip()
+            
+            # Verificar que no sean valores inválidos
+            if entrada_str in ['', 'nan', '0:00', '00:00'] or salida_str in ['', 'nan', '0:00', '00:00']:
+                continue
+            
+            # Convertir a horas
+            entrada = datetime.strptime(entrada_str, "%H:%M").time()
+            salida = datetime.strptime(salida_str, "%H:%M").time()
+            
+            # Detectar patrones anómalos
+            entrada_decimal = entrada.hour + entrada.minute/60
+            salida_decimal = salida.hour + salida.minute/60
+            
+            # Casos sospechosos:
+            sospechoso = False
+            razon = ""
+            
+            # 1. Entrada muy tarde (después de las 20:00)
+            if entrada_decimal >= 20:
+                sospechoso = True
+                razon = f"Entrada registrada a las {entrada_str} (muy tarde - ¿podría ser salida?)"
+            
+            # 2. Salida muy temprano (antes de las 10:00)
+            elif salida_decimal <= 10:
+                sospechoso = True
+                razon = f"Salida registrada a las {salida_str} (muy temprano - ¿podría ser entrada?)"
+            
+            # 3. Entrada después de salida (mismo día)
+            elif entrada_decimal > salida_decimal:
+                sospechoso = True
+                razon = f"Entrada ({entrada_str}) después de salida ({salida_str}) - posible error de asignación"
+            
+            if sospechoso:
+                row_dict = row.to_dict()
+                row_dict['Razon_Sospecha'] = razon
+                row_dict['Entrada_Original'] = entrada_str
+                row_dict['Salida_Original'] = salida_str
+                horarios_ambiguos.append(row_dict)
+                
+        except Exception as e:
+            continue
+    
+    return pd.DataFrame(horarios_ambiguos) if horarios_ambiguos else pd.DataFrame()
 
 
 def filtrar_registros_sin_asistencia(df: pd.DataFrame) -> tuple:
