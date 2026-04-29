@@ -116,6 +116,7 @@ Si hay horarios sospechosos (ej: entrada muy tarde):
 - **Procesamiento**: Pandas, OpenPyXL
 - **PDFs**: pdfplumber (opcional)
 - **UI/UX**: Componentes interactivos avanzados
+- IA para desarrollo de codigo y optimizacion
 
 ## 📈 **Mejoras en v1.3**
 
@@ -132,10 +133,5 @@ Si hay horarios sospechosos (ej: entrada muy tarde):
 - [📝 Nueva Funcionalidad Detallada](NUEVA_FUNCIONALIDAD_MARCADO_UNICO.md)
 - [📋 Ejemplos de Uso](EJEMPLO_USO_MARCADO_UNICO.md)
 
-## 📞 **Soporte**
-
-Para consultas sobre la nueva funcionalidad de marcado único o cualquier otro aspecto del sistema, consulta la documentación incluida o contacta al equipo de desarrollo.
-
----
 
 **Versión**: 1.3 | **Fecha**: Noviembre 2024 | **Estado**: ✅ Producción
